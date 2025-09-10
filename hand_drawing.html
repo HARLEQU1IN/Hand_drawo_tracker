@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Hand-Draw App</title>
+<meta name="theme-color" content="#0b0b0c">
+<style>
+  :root{
+    --bg:#0b0b0c;
+    --panel:#111214;
+    --ink:#2fff00;
+    --muted:#7f848a;
+    --accent:#4c9aff;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font:14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+    overscroll-behavior:none;
+  }
+
+  /* Layout */
+  .app{
+    position:fixed; inset:0;
+    display:grid; grid-template-rows:auto 1fr auto;
+  }
+  header{
+    display:flex; align-items:center; gap:.75rem;
+    padding: clamp(10px,2.2vmin,18px) clamp(12px,3vmin,22px);
+    background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
+    border-bottom:1px solid #1b1d21;
+    backdrop-filter:saturate(120%) blur(6px);
+  }
+  .dot{
+    width:.6rem; height:.6rem; border-radius:50%;
+    background:var(--muted);
+    box-shadow:0 0 0 2px #0b0b0c, 0 0 0 6px rgba(76,154,255,.12);
+    transition:background .25s ease;
+  }
+  .dot.on{ background:#30d158; box-shadow:0 0 0 2px #0b0b0c, 0 0 0 6px rgba(48,209,88,.18); }
+  h1{ font-size:clamp(16px,3.2vmin,22px); margin:0; letter-spacing:.2px; }
+  .spacer{flex:1}
+  .pill{
+    border:1px solid #23262b; background:var(--panel);
+    padding:.5rem .75rem; border-radius:999px; color:var(--muted);
+    display:flex; align-items:center; gap:.5rem;
+  }
+  .pill b{color:var(--ink); font-weight:600}
+  .btn{
+    appearance:none; border:1px solid #23262b; background:var(--panel);
+    color:var(--ink); border-radius:12px; padding:.6rem .9rem; font-weight:600;
+    cursor:pointer; transition:transform .08s ease, border-color .2s ease, background .2s ease;
+  }
+  .btn:active{ transform:translateY(1px) scale(.99) }
+  .btn.ghost{ background:transparent }
+  .btn.primary{ border-color:#2e6adb; background:linear-gradient(180deg,#2e6adb,#1c4eb6); color:rgb(34, 255, 0) }
+  .toolbar{
+    display:flex; gap:.5rem; align-items:center;
+    background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,0));
+    border-top:1px solid #1b1d21; padding:.6rem .8rem; flex-wrap:wrap;
+  }
+  .slider{
+    display:flex; align-items:center; gap:.6rem; color:var(--muted);
+    padding:.35rem .6rem; border:1px solid #23262b; border-radius:12px; background:var(--panel);
+  }
+  .slider input{ accent-color:var(--accent); width:140px }
+  .toggle{
+    display:flex; align-items:center; gap:.6rem; color:var(--muted);
+    padding:.35rem .6rem; border:1px solid #23262b; border-radius:12px; background:var(--panel);
+    user-select:none;
+  }
+  .hint{ color:var(--muted); margin-left:auto; display:flex; align-items:center; gap:.4rem }
+  .kbd{ border:1px solid #23262b; background:#0f1113; padding:.2rem .45rem; border-radius:6px; color:#00ed10; font-variant:tabular-nums; }
+  /* Stage */
+  .stage{
+    position:relative; overflow:hidden; background:
+      radial-gradient(1200px 1200px at 80% -20%, rgba(76,154,255,.12), transparent),
+      radial-gradient(1400px 900px at 10% 20%, rgba(76,154,255,.08), transparent);
+  }
+  video, canvas{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:cover; object-position:center;
+  }
+  video{
+    transform: scaleX(-1); /* mirror for natural interaction */
+    filter: saturate(105%) contrast(105%) brightness(95%);
+  }
+  canvas{ pointer-events:none; }
+
+  /* Toast / tips */
+  .toast{
+    position:absolute; left:50%; top:16px; transform:translateX(-50%);
+    background:#0f1113; border:1px solid #23262b; color:#00de1e;
+    padding:.6rem .8rem; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.35);
+    display:flex; align-items:center; gap:.6rem; z-index:10;
+  }
+  .link{ color:#9ec5ff; text-decoration:none; border-bottom:1px dotted #355; }
+  .sr{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; clip-path:inset(50%); }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="dot" id="status-dot" title="Camera status"></div>
+    <h1>Hand-Draw App</h1>
+    <div class="spacer"></div>
+    <div class="pill" id="mode-indicator" title="Pinch index & thumb to draw">
+      Mode: <b id="mode-label">Idle</b>
+    </div>
+    <button class="btn ghost" id="clear-btn" aria-label="Clear drawing">Clear</button>
+  </header>
+
+  <main class="stage" id="stage">
+    <div class="toast" id="toast" role="status" aria-live="polite">
+      Grant camera access, then pinch your <b>index</b> and <b>thumb</b> to draw ✍️
+    </div>
+    <video id="video" playsinline autoplay muted></video>
+    <!-- overlay for optional guides (landmarks) -->
+    <canvas id="overlay"></canvas>
+    <!-- persistent drawing canvas -->
+    <canvas id="draw"></canvas>
+  </main>
+
+  <footer class="toolbar">
+    <div class="slider" title="Line thickness">
+      Stroke <span id="stroke-val" class="kbd">4</span>
+      <input id="stroke" type="range" min="1" max="20" step="1" value="4" />
+    </div>
+    <div class="toggle" title="Show tracking guides">
+      <label><input id="guides" type="checkbox" /> Show guides</label>
+    </div>
+    <div class="hint">
+      <span>Tip: keep fingers within view. Pinch threshold adapts to hand size.</span>
+    </div>
+  </footer>
+</div>
+
+<!-- MediaPipe Hands (client-side only) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+<script>
+(function(){
+  const video = document.getElementById('video');
+  const overlay = document.getElementById('overlay');
+  const draw = document.getElementById('draw');
+  const ctxO = overlay.getContext('2d');
+  const ctxD = draw.getContext('2d', { alpha: true });
+  const dot = document.getElementById('status-dot');
+  const modeIndicator = document.getElementById('mode-indicator');
+  const modeLabel = document.getElementById('mode-label');
+  const toast = document.getElementById('toast');
+  const clearBtn = document.getElementById('clear-btn');
+  const strokeRange = document.getElementById('stroke');
+  const strokeVal = document.getElementById('stroke-val');
+  const showGuides = document.getElementById('guides');
+
+  let pinchActive = false;
+  let lastPoint = null; // {x,y}
+  let guides = false;
+  let lineWidth = +strokeRange.value;
+
+  // Resize canvases to fill stage with devicePixelRatio for crisp lines
+  const resize = () => {
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); // cap DPR for perf
+    for (const c of [overlay, draw]) {
+      const rect = c.parentElement.getBoundingClientRect();
+      c.width  = Math.floor(rect.width * dpr);
+      c.height = Math.floor(rect.height * dpr);
+      c.style.width = rect.width + 'px';
+      c.style.height = rect.height + 'px';
+      const g = c.getContext('2d');
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    // crisp stroke settings
+    ctxD.lineCap = 'round';
+    ctxD.lineJoin = 'round';
+  };
+  addEventListener('resize', resize, { passive:true });
+
+  // UI controls
+  strokeRange.addEventListener('input', () => {
+    lineWidth = +strokeRange.value;
+    strokeVal.textContent = lineWidth;
+  });
+  showGuides.addEventListener('change', () => guides = showGuides.checked);
+  clearBtn.addEventListener('click', () => {
+    ctxD.clearRect(0,0,draw.width,draw.height);
+    lastPoint = null;
+  });
+
+  // Initialize MediaPipe Hands
+  const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6
+  });
+
+  hands.onResults(onResults);
+
+  let camera;
+  async function start(){
+    resize();
+    try{
+      dot.classList.remove('on');
+      // Camera from MediaPipe utils (handles mobile constraints nicely)
+      camera = new Camera(video, {
+        onFrame: async () => { await hands.send({ image: video }); },
+        width: 1280,
+        height: 720
+      });
+      await camera.start();
+      dot.classList.add('on');
+      hideToastSoon();
+    }catch(err){
+      console.error(err);
+      toast.innerHTML = 'Camera access failed. Check permissions and reload.';
+    }
+  }
+
+  function hideToastSoon(){
+    setTimeout(()=> toast.style.display = 'none', 3200);
+  }
+
+  // Utility: normalized coords [0..1] -> canvas pixels
+  function toCanvas(x, y){
+    // video is mirrored via CSS; compensate by mirroring x
+    const cx = overlay.clientWidth * (1 - x);
+    const cy = overlay.clientHeight * y;
+    return { x: cx, y: cy };
+  }
+
+  // Pinch detection with hysteresis; adaptive to hand size
+  const PINCH_ON = 0.05;   // start drawing when distance < 5% of frame width
+  const PINCH_OFF = 0.07;  // stop when distance > 7% (prevents jitter)
+
+  function onResults(results){
+    const cw = overlay.clientWidth, ch = overlay.clientHeight;
+
+    // Clear overlay (guides)
+    ctxO.clearRect(0,0,cw,ch);
+
+    if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0){
+      setMode(false);
+      lastPoint = null;
+      return;
+    }
+
+    const lm = results.multiHandLandmarks[0];
+
+    // Thumb tip (4) & Index tip (8)
+    const t = lm[4];
+    const i = lm[8];
+
+    // Euclidean distance in normalized space
+    const dx = (t.x - i.x), dy = (t.y - i.y);
+    const dist = Math.hypot(dx, dy);
+
+    // Hysteresis toggle
+    if (!pinchActive && dist < PINCH_ON) pinchActive = true;
+    else if (pinchActive && dist > PINCH_OFF) pinchActive = false;
+    setMode(pinchActive);
+
+    // Midpoint of pinch (in normalized space)
+    const mid = { x: (t.x + i.x) * 0.5, y: (t.y + i.y) * 0.5 };
+    const p = toCanvas(mid.x, mid.y);
+
+    // Draw persistent line when pinched
+    if (pinchActive){
+      if (!lastPoint) lastPoint = p;
+      // smooth by interpolating if movement is large (prevents gaps)
+      const dxp = p.x - lastPoint.x, dyp = p.y - lastPoint.y;
+      const distPix = Math.hypot(dxp, dyp);
+      const steps = Math.max(1, Math.min(8, Math.floor(distPix / 3)));
+      ctxD.strokeStyle = 'rgba(230,230,230,0.95)';
+      ctxD.lineWidth = lineWidth;
+      ctxD.beginPath();
+      ctxD.moveTo(lastPoint.x, lastPoint.y);
+      for (let s=1; s<=steps; s++){
+        const xx = lastPoint.x + dxp * (s/steps);
+        const yy = lastPoint.y + dyp * (s/steps);
+        ctxD.lineTo(xx, yy);
+      }
+      ctxD.stroke();
+      lastPoint = p;
+    } else {
+      lastPoint = null;
+    }
+
+    // Optional guides
+    if (guides){
+      // fingertips & pinch line
+      const tt = toCanvas(t.x, t.y);
+      const ii = toCanvas(i.x, i.y);
+      ctxO.globalAlpha = 0.9;
+      ctxO.strokeStyle = 'rgba(156,197,255,.5)';
+      ctxO.lineWidth = 2;
+      ctxO.beginPath(); ctxO.moveTo(tt.x, tt.y); ctxO.lineTo(ii.x, ii.y); ctxO.stroke();
+      ctxO.fillStyle = 'rgba(156,197,255,.9)';
+      ctxO.beginPath(); ctxO.arc(tt.x, tt.y, 5, 0, Math.PI*2); ctxO.fill();
+      ctxO.beginPath(); ctxO.arc(ii.x, ii.y, 5, 0, Math.PI*2); ctxO.fill();
+
+      // pinch dot
+      ctxO.fillStyle = pinchActive ? 'rgba(48,209,88,.95)' : 'rgba(200,200,200,.7)';
+      ctxO.beginPath(); ctxO.arc(p.x, p.y, 6, 0, Math.PI*2); ctxO.fill();
+      ctxO.globalAlpha = 1;
+    }
+  }
+
+  function setMode(active){
+    if (active){
+      modeLabel.textContent = 'Drawing';
+      modeIndicator.style.borderColor = 'rgba(48,209,88,.35)';
+      modeIndicator.style.boxShadow = 'inset 0 0 0 1px rgba(48,209,88,.15)';
+    } else {
+      modeLabel.textContent = 'Idle';
+      modeIndicator.style.borderColor = '';
+      modeIndicator.style.boxShadow = '';
+    }
+  }
+
+  // Kick off
+  start();
+})();
+</script>
+</body>
+</html>
